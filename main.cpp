@@ -37,7 +37,8 @@ struct Read
 
 struct Motif
 {
-    string name, seq, eseq;
+    string name, seq;
+    vector<string> eseq;
     unsigned pos, edist;
 };
 
@@ -114,14 +115,14 @@ struct motif_match {
     unsigned pos, edist;
 };
 
-motif_match get_best_match(const string &motif, const string &emotif,
+motif_match get_best_match(const string &motif, const vector<string> &evec,
         Read &r, vector<unsigned> candidates)
 {
     unsigned min_pos = numeric_limits<unsigned>::min();
-    unsigned min_edist = emotif.size();
+    unsigned min_edist = evec[0].size();
     for (unsigned pos : candidates) {
         string_view cview(r.seq.data() + pos, motif.size());
-        unsigned edist = g_e.embed_compare(cview, emotif, min_edist);
+        unsigned edist = g_e.embed_compare(cview, evec, min_edist);
         if (edist < min_edist) {
             min_pos = pos;
             min_edist = edist;
@@ -142,7 +143,8 @@ unsigned map_motifs(vector<Motif> &motifs, Read &r)
            seed(motifs[i].seq, r, candidates, 1);
 
        if (!candidates.empty()) {
-           auto [pos, edist] = get_best_match(motifs[i].seq, motifs[i].eseq, r, candidates);
+           auto [pos, edist] = get_best_match(motifs[i].seq, motifs[i].eseq,
+                   r, candidates);
            motifs[i].pos = pos;
            motifs[i].edist = edist;
        } else {
@@ -154,7 +156,7 @@ unsigned map_motifs(vector<Motif> &motifs, Read &r)
        redist += motifs[i].edist;
     }
 
-    return all_mapped ? redist : (motifs[0].eseq.size() * motifs.size());
+    return all_mapped ? redist : (motifs[0].eseq[0].size() * motifs.size());
 }
 
 void print_motifs(vector<Motif> &motifs, ostream &out)
@@ -191,7 +193,7 @@ void process_reads(vector<Motif> &motifs, const string &rfname, ostream &out)
     ifstream in(rfname);
     vector<Read> reads;
     vector<Motif> best_motifs;
-    unsigned best_redist = motifs.size() * motifs[0].eseq.size();
+    unsigned best_redist = motifs.size() * motifs[0].eseq[0].size();
     do {
         Read r{};
         in >> r;
@@ -259,8 +261,8 @@ int main(int argc, char *argv[])
     cerr << "Found " << motifs.size() << " motifs." << endl;
 
     for (Motif &m : motifs)
-        m.eseq = g_e.embed_string(m.seq);
-    
+        g_e.embed_string(m.seq, m.eseq);
+
     make_code();
 
     string ofile_name = "";

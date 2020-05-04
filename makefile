@@ -10,7 +10,7 @@ endif
 HEADERS = $(wildcard *.h)
 SRCS = $(wildcard *.cpp)
 OBJS = $(SRCS:.cpp=.o)
-.PHONY = depend clean
+.PHONY = clean
 
 all: motif-search
 
