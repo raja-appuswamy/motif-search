@@ -2,12 +2,20 @@
 #include <fstream>
 #include <array>
 #include "header.h"
+#include <boost/algorithm/string/case_conv.hpp>
 
 using namespace std;
 static unsigned g_kmer_len = 3;
 static uint8_t g_code[256];
 static Embedding g_e;
 uint32_t g_mask;
+
+enum class IType
+{
+    Bonito,
+    Guppy
+};
+IType g_itype = IType::Guppy;
 
 void make_code(void)
 {
@@ -30,16 +38,26 @@ struct Read
 struct Motif
 {
     string name, seq, eseq;
-    unsigned pos;
+    unsigned pos, edist;
 };
 
 istream &operator>>(istream &in, Read &r)
 {
-    string tmp;
-    if (!getline(in, r.name)) return in;
-    if (!getline(in, r.seq)) return in;
-    if (!getline(in, tmp)) return in;
-    if (!getline(in, r.qual)) return in;
+    if (g_itype == IType::Guppy) {
+        string tmp;
+        if (!getline(in, r.name)) return in;
+        if (!getline(in, r.seq)) return in;
+        if (!getline(in, tmp)) return in;
+        if (!getline(in, r.qual)) return in;
+    } else {
+        if (!getline(in, r.name)) return in;
+        string seq;
+        r.seq = "";
+        do {
+            getline(in, seq);
+            r.seq += seq;
+        } while (in && in.peek() != '>');
+    }
 
     return in;
 }
@@ -92,11 +110,15 @@ void seed(const string &motif, Read &r, vector<unsigned> &candidates,
     }
 }
 
-unsigned get_best_match(const string &motif, const string &emotif, Read &r,
-        vector<unsigned> candidates)
+struct motif_match {
+    unsigned pos, edist;
+};
+
+motif_match get_best_match(const string &motif, const string &emotif,
+        Read &r, vector<unsigned> candidates)
 {
     unsigned min_pos = numeric_limits<unsigned>::min();
-    unsigned min_edist = numeric_limits<unsigned>::max();
+    unsigned min_edist = emotif.size();
     for (unsigned pos : candidates) {
         string_view cview(r.seq.data() + pos, motif.size());
         unsigned edist = g_e.embed_compare(cview, emotif, min_edist);
@@ -106,11 +128,13 @@ unsigned get_best_match(const string &motif, const string &emotif, Read &r,
         }
     }
 
-    return min_pos;
+    return motif_match{min_pos, min_edist};
 }
 
-void map_motifs(vector<Motif> &motifs, Read &r)
+unsigned map_motifs(vector<Motif> &motifs, Read &r)
 {
+    unsigned redist = 0;
+    bool all_mapped = true;
     for (unsigned i = 0; i < motifs.size(); i++) {
        vector<unsigned> candidates;
        seed(motifs[i].seq, r, candidates, 2);
@@ -118,15 +142,36 @@ void map_motifs(vector<Motif> &motifs, Read &r)
            seed(motifs[i].seq, r, candidates, 1);
 
        if (!candidates.empty()) {
-           motifs[i].pos = get_best_match(motifs[i].seq, motifs[i].eseq,
-                   r, candidates);
+           auto [pos, edist] = get_best_match(motifs[i].seq, motifs[i].eseq, r, candidates);
+           motifs[i].pos = pos;
+           motifs[i].edist = edist;
        } else {
            motifs[i].pos = numeric_limits<unsigned>::max();
+           motifs[i].edist = motifs[i].eseq.size();
+           all_mapped = false;
        }
+
+       redist += motifs[i].edist;
+    }
+
+    return all_mapped ? redist : (motifs[0].eseq.size() * motifs.size());
+}
+
+void print_motifs(vector<Motif> &motifs, ostream &out)
+{
+    sort(motifs.begin(), motifs.end(),
+            [](Motif &left, Motif &right) {return left.pos < right.pos;});
+
+    for (Motif &m : motifs) {
+        out << m.name << ",";
+        if (m.pos == (numeric_limits<unsigned>::max()))
+            out << "*,*\n";
+        else
+            out << m.pos << "," << m.edist << endl;
     }
 }
 
-void print_motifs(vector<Motif> &motifs, Read &r, ostream &out)
+void print_per_read_motifs(vector<Motif> &motifs, Read &r, ostream &out)
 {
     sort(motifs.begin(), motifs.end(),
             [](Motif &left, Motif &right) {return left.pos < right.pos;});
@@ -135,9 +180,9 @@ void print_motifs(vector<Motif> &motifs, Read &r, ostream &out)
     for (Motif &m : motifs) {
         out << m.name << ",";
         if (m.pos == (numeric_limits<unsigned>::max()))
-            out << "*\n";
+            out << "*,*\n";
         else
-            out << m.pos << endl;
+            out << m.pos << "," << m.edist << endl;
     }
 }
 
@@ -145,12 +190,26 @@ void process_reads(vector<Motif> &motifs, const string &rfname, ostream &out)
 {
     ifstream in(rfname);
     vector<Read> reads;
-    Read r{};
-    while (in >> r) {
+    vector<Motif> best_motifs;
+    unsigned best_redist = motifs.size() * motifs[0].eseq.size();
+    do {
+        Read r{};
+        in >> r;
+
+        //read must be atleast as long as a motif
+        if (r.seq.size() <= motifs[0].seq.size())
+            continue;
+
         index_read(r);
-        map_motifs(motifs, r);
-        print_motifs(motifs, r, out);
-    }
+        unsigned redist = map_motifs(motifs, r);
+        if (redist < best_redist) {
+            best_motifs.clear();
+            best_motifs.insert(best_motifs.end(), motifs.begin(), motifs.end());
+        }
+        //print_per_read_motifs(motifs, r, out);
+    } while(in);
+
+    print_motifs(best_motifs, out);
 }
 
 int main(int argc, char *argv[])
@@ -163,7 +222,8 @@ int main(int argc, char *argv[])
         ("motifs,m", po::value<string>(), "File containing motifs")
         ("read,r", po::value<vector<string>>()->multitoken(), "File(s) containing reads")
         ("kmerlen,l", po::value<unsigned>(), "Length of kmer (5)")
-        ("output,o", po::value<string>(), "Ouptut file(default stdout)");
+        ("output,o", po::value<string>(), "Ouptut file(default stdout)")
+        ("itype,i", po::value<string>(), "input format (bonito or guppy bc)");
     po::command_line_parser parser{argc, argv};
     parser.options(description);
     auto parsed_result = parser.run();
@@ -183,20 +243,20 @@ int main(int argc, char *argv[])
 
     if (!vm["kmerlen"].empty()) {
         g_kmer_len = vm["kmerlen"].as<unsigned>();
-        cout << "Using kmer of size " << g_kmer_len;
+        cerr << "Using kmer of size " << g_kmer_len << endl;
     }
 
     assert(g_kmer_len < 16);
     g_mask = (1U << (g_kmer_len * 2)) - 1;
 
     const string &motif_name = vm["motifs"].as<string>();
-    cout << "Reading motif file " << motif_name << endl;
+    cerr << "Reading motif file " << motif_name << endl;
     ifstream mfile(motif_name);
     vector<Motif> motifs;
     Motif m;
     while (mfile >> m)
         motifs.push_back(m);
-    cout << "Found " << motifs.size() << " motifs." << endl;
+    cerr << "Found " << motifs.size() << " motifs." << endl;
 
     for (Motif &m : motifs)
         m.eseq = g_e.embed_string(m.seq);
@@ -210,9 +270,17 @@ int main(int argc, char *argv[])
         ofile.open(ofile_name);
     }
 
+    if (!vm["itype"].empty()) {
+        if (boost::algorithm::to_lower_copy(vm["itype"].as<string>()) ==
+                "bonito") {
+            cerr << "Setting input format to bonito\n";
+            g_itype = IType::Bonito;
+        }
+    }
+
     auto start = chrono::system_clock::now();
     for (const string &rf : vm["read"].as<vector<string>>()) {
-        cout << "Processing read file " << rf << endl;
+        cerr << "Processing read file " << rf << endl;
         process_reads(motifs, rf, ofile.is_open() ? ofile : cout);
     }
     if (ofile.is_open())

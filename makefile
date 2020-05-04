@@ -4,7 +4,7 @@ LIBS=-lz -lboost_program_options
 ifneq ($(DEBUG),)
 	CPPFLAGS+=-O0 -DDBGPRINT
 else
-	CPPFLAGS+=-O2 -mavx2
+	CPPFLAGS+=-O2
 endif
 
 HEADERS = $(wildcard *.h)
