@@ -20,8 +20,8 @@ void Embedding::embed_string(const string_view &str, vector<string> &evec)
 
 unsigned Embedding::embed_compare(const string_view &to_embed,
         const vector<string> &evec, unsigned threshold)
-
-    for (int i = 0; i < N_RNDSTR; i++)
+{
+    for (int i = 0; i < N_RNDSTR; i++) {
         unsigned nmismatch = embed_compare(to_embed, evec[i], i, threshold);
         if (nmismatch < threshold)
             threshold = nmismatch;
