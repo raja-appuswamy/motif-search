@@ -188,11 +188,17 @@ void print_per_read_motifs(vector<Motif> &motifs, Read &r, ostream &out)
     }
 }
 
-void process_reads(vector<Motif> &motifs, const string &rfname, ostream &out)
+void process_reads(vector<Motif> &motifs, vector<Motif> &best_motifs,
+        const string &rfname, ostream &out)
 {
     ifstream in(rfname);
+    if (!in.is_open()) {
+        cerr << "ERROR: Invalid input file " << rfname << endl;
+        return;
+    }
+    cerr << "Processing read file " << rfname << endl;
+
     vector<Read> reads;
-    vector<Motif> best_motifs;
     unsigned best_redist = motifs.size() * motifs[0].eseq[0].size();
     do {
         Read r{};
@@ -210,8 +216,6 @@ void process_reads(vector<Motif> &motifs, const string &rfname, ostream &out)
         }
         //print_per_read_motifs(motifs, r, out);
     } while(in);
-
-    print_motifs(best_motifs, out);
 }
 
 int main(int argc, char *argv[])
@@ -280,11 +284,12 @@ int main(int argc, char *argv[])
         }
     }
 
+    vector<Motif> best_motifs;
     auto start = chrono::system_clock::now();
     for (const string &rf : vm["read"].as<vector<string>>()) {
-        cerr << "Processing read file " << rf << endl;
-        process_reads(motifs, rf, ofile.is_open() ? ofile : cout);
+        process_reads(motifs, best_motifs, rf, ofile.is_open() ? ofile : cout);
     }
+    print_motifs(best_motifs, ofile.is_open() ? ofile : cout);
     if (ofile.is_open())
         ofile.close();
     auto end = chrono::system_clock::now();
