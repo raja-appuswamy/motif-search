@@ -5,7 +5,7 @@
 #include <boost/algorithm/string/case_conv.hpp>
 
 using namespace std;
-static unsigned g_kmer_len = 3;
+static unsigned g_kmer_len = 5;
 static uint8_t g_code[256];
 static Embedding g_e;
 uint32_t g_mask;

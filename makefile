@@ -17,5 +17,8 @@ all: motif-search
 motif-search: $(OBJS)
 	$(CPP) $(CPPFLAGS) $(INCLUDES) -o $@ $(OBJS) ${LIBS}
 
+sample: motif-search
+	./motif-search -r `ls sample_data/reads/EINS3-guppy2/*.fastq | xargs echo -n` -m sample_data/motifs/EINS.fa -l 5
+
 clean:
 	rm motif-search *.o
