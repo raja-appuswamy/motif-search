@@ -132,7 +132,13 @@ motif_match get_best_match(const string &motif, const vector<string> &evec,
     return motif_match{min_pos, min_edist};
 }
 
-unsigned map_motifs(vector<Motif> &motifs, Read &r)
+struct MapStats
+{
+    bool all_mapped;
+    unsigned redist;
+};
+
+MapStats map_motifs(vector<Motif> &motifs, Read &r)
 {
     unsigned redist = 0;
     bool all_mapped = true;
@@ -156,7 +162,10 @@ unsigned map_motifs(vector<Motif> &motifs, Read &r)
        redist += motifs[i].edist;
     }
 
-    return all_mapped ? redist : (motifs[0].eseq[0].size() * motifs.size());
+    if (!all_mapped)
+	redist = motifs[0].eseq[0].size() * motifs.size();
+
+    return MapStats{all_mapped, redist};
 }
 
 void print_motifs(vector<Motif> &motifs, ostream &out)
@@ -188,34 +197,46 @@ void print_per_read_motifs(vector<Motif> &motifs, Read &r, ostream &out)
     }
 }
 
-void process_reads(vector<Motif> &motifs, vector<Motif> &best_motifs,
+struct ReadStats
+{
+    int ntotal, nmapped;
+};
+
+ReadStats process_reads(vector<Motif> &motifs, vector<Motif> &best_motifs,
         const string &rfname, ostream &out)
 {
     ifstream in(rfname);
     if (!in.is_open()) {
         cerr << "ERROR: Invalid input file " << rfname << endl;
-        return;
+        return ReadStats{0,0};
     }
     cerr << "Processing read file " << rfname << endl;
 
     vector<Read> reads;
     unsigned best_redist = motifs.size() * motifs[0].eseq[0].size();
+    int ntotal = 0, nmapped = 0;
     do {
         Read r{};
         in >> r;
+	ntotal++;
 
         //read must be atleast as long as a motif
         if (r.seq.size() <= motifs[0].seq.size())
             continue;
 
         index_read(r);
-        unsigned redist = map_motifs(motifs, r);
+        auto [all_mapped, redist] = map_motifs(motifs, r);
         if (redist < best_redist) {
             best_motifs.clear();
             best_motifs.insert(best_motifs.end(), motifs.begin(), motifs.end());
         }
+
+	if (all_mapped)
+	    nmapped++;
         //print_per_read_motifs(motifs, r, out);
     } while(in);
+
+    return ReadStats{ntotal, nmapped};
 }
 
 int main(int argc, char *argv[])
@@ -286,12 +307,24 @@ int main(int argc, char *argv[])
 
     vector<Motif> best_motifs;
     auto start = chrono::system_clock::now();
+    vector<tuple<string, int, int>> stats;
     for (const string &rf : vm["read"].as<vector<string>>()) {
-        process_reads(motifs, best_motifs, rf, ofile.is_open() ? ofile : cout);
+        auto [ntotal, nmapped] = process_reads(motifs, best_motifs, rf,
+		ofile.is_open() ? ofile : cout);
+	stats.push_back(tuple{rf, ntotal, nmapped});
     }
     print_motifs(best_motifs, ofile.is_open() ? ofile : cout);
     if (ofile.is_open())
         ofile.close();
+
+    cerr << "-------------\n";
+    cerr << "Summary Stats\n";
+    cerr << "-------------\n";
+    for (auto &t : stats) {
+	cerr << get<2>(t) << " out of " << get<1>(t) << " reads fully mapped in"
+	    " file " << get<0>(t) << endl;
+    }
+
     auto end = chrono::system_clock::now();
     auto elapsed = chrono::duration_cast<std::chrono::milliseconds>(end - start);
     cerr << "Completed. Wall clock time: " <<
