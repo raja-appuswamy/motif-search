@@ -214,8 +214,9 @@ ReadStats process_reads(vector<Motif> &mmotifs, vector<Motif> &qmotifs,
     cerr << "Processing read file " << rfname << endl;
 
     vector<Read> reads;
-    unsigned best_mredist = mmotifs.size() * mmotifs[0].eseq[0].size();
     unsigned best_qredist = mmotifs.size() * mmotifs[0].eseq[0].size();
+    unsigned best_mredist = best_qredist;
+    unsigned best_redist = best_mredist + best_qredist;
     int ntotal = 0, nmapped = 0;
     do {
         Read r{};
@@ -228,28 +229,66 @@ ReadStats process_reads(vector<Motif> &mmotifs, vector<Motif> &qmotifs,
 
         index_read(r);
 
-        // find best position for map motifs
-        auto [all_mapped, redist] = map_motifs(mmotifs, r);
-        if (redist < best_mredist) {
-            best_mmotifs.clear();
-            best_mmotifs.insert(best_mmotifs.end(), mmotifs.begin(), mmotifs.end());
-            best_mredist = redist;
-        }
-	if (all_mapped)
-	    nmapped++;
+	if (qmotifs.empty()) {
+	    // find best position for map motifs
+	    auto [all_mapped, mredist] = map_motifs(mmotifs, r);
+	    if (all_mapped)
+		nmapped++;
 
-        // now go over qmotif list and find best query motif
-        vector<Motif> vq;
-        for (Motif &q : qmotifs) {
-            vq.push_back(q);
-            auto [all_mapped, redist] = map_motifs(vq, r);
-            if (all_mapped && redist < best_qredist) {
-                best_qredist = redist;
-                best_qmotif = vq[0];
-            }
-            vq.pop_back();
-        }
+	    if (mredist < best_mredist) {
+		best_mredist = mredist;
+		best_mmotifs.clear();
+		best_mmotifs.insert(best_mmotifs.end(), mmotifs.begin(), mmotifs.end());
+	    }
+	} else {
+	    // go over qmotif list and find best query motif for this read
+	    vector<Motif> vq;
+	    unsigned best_qmotif_idx = numeric_limits<unsigned>::max();
+	    best_qredist = mmotifs.size() * mmotifs[0].eseq[0].size();
+	    unsigned best_qpos = 0;
+	    for (unsigned i = 0; i < qmotifs.size(); ++i) {
+		Motif &q = qmotifs[i];
+		vq.push_back(q);
+		auto [all_mapped, qredist] = map_motifs(vq, r);
+		if (all_mapped && qredist < best_qredist) {
+		    best_qredist = qredist;
+		    best_qmotif_idx = i;
+		    best_qpos = vq[0].pos;
+		    /*
+		    cerr << "saving qmotif at pos " << best_qpos <<
+		    " with edist " << best_qredist << 
+		    " for mredist " << best_mredist << 
+		    " and total edist " << best_mredist + best_qredist <<
+		    " when best total was " << best_redist << endl;
+		    */
+		}
+		vq.pop_back();
+	    }
+	    if (best_qmotif_idx == numeric_limits<unsigned>::max())
+		continue;
 
+	    // find best position for map motifs
+	    auto [all_mapped, best_mredist] = map_motifs(mmotifs, r);
+	    if (all_mapped)
+		nmapped++;
+
+	    // if combination of best + best is best, keep both
+	    if (best_redist > best_mredist + best_qredist) {
+		best_redist = best_mredist + best_qredist;
+
+		// save map motifs
+		best_mmotifs.clear();
+		best_mmotifs.insert(best_mmotifs.end(), mmotifs.begin(), mmotifs.end());
+
+		// save query motifs
+		best_qmotif = qmotifs[best_qmotif_idx];
+		best_qmotif.pos = best_qpos;
+		best_qmotif.edist = best_qredist;
+
+		//cerr << "Finally saving qmotif at pos " << best_qpos <<
+		//    " with edist " << best_qredist << endl;
+	    }
+	}
         //print_per_read_motifs(motifs, r, out);
     } while(in);
 
