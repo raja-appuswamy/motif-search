@@ -15,7 +15,7 @@ enum class IType
     Bonito,
     Guppy
 };
-IType g_itype = IType::Guppy;
+IType g_itype = IType::Bonito;
 
 void make_code(void)
 {
@@ -202,7 +202,8 @@ struct ReadStats
     int ntotal, nmapped;
 };
 
-ReadStats process_reads(vector<Motif> &motifs, vector<Motif> &best_motifs,
+ReadStats process_reads(vector<Motif> &mmotifs, vector<Motif> &qmotifs,
+        vector<Motif> &best_mmotifs, Motif &best_qmotif,
         const string &rfname, ostream &out)
 {
     ifstream in(rfname);
@@ -213,7 +214,8 @@ ReadStats process_reads(vector<Motif> &motifs, vector<Motif> &best_motifs,
     cerr << "Processing read file " << rfname << endl;
 
     vector<Read> reads;
-    unsigned best_redist = motifs.size() * motifs[0].eseq[0].size();
+    unsigned best_mredist = mmotifs.size() * mmotifs[0].eseq[0].size();
+    unsigned best_qredist = mmotifs.size() * mmotifs[0].eseq[0].size();
     int ntotal = 0, nmapped = 0;
     do {
         Read r{};
@@ -221,18 +223,33 @@ ReadStats process_reads(vector<Motif> &motifs, vector<Motif> &best_motifs,
 	ntotal++;
 
         //read must be atleast as long as a motif
-        if (r.seq.size() <= motifs[0].seq.size())
+        if (r.seq.size() <= mmotifs[0].seq.size())
             continue;
 
         index_read(r);
-        auto [all_mapped, redist] = map_motifs(motifs, r);
-        if (redist < best_redist) {
-            best_motifs.clear();
-            best_motifs.insert(best_motifs.end(), motifs.begin(), motifs.end());
-        }
 
+        // find best position for map motifs
+        auto [all_mapped, redist] = map_motifs(mmotifs, r);
+        if (redist < best_mredist) {
+            best_mmotifs.clear();
+            best_mmotifs.insert(best_mmotifs.end(), mmotifs.begin(), mmotifs.end());
+            best_mredist = redist;
+        }
 	if (all_mapped)
 	    nmapped++;
+
+        // now go over qmotif list and find best query motif
+        vector<Motif> vq;
+        for (Motif &q : qmotifs) {
+            vq.push_back(q);
+            auto [all_mapped, redist] = map_motifs(vq, r);
+            if (all_mapped && redist < best_qredist) {
+                best_qredist = redist;
+                best_qmotif = vq[0];
+            }
+            vq.pop_back();
+        }
+
         //print_per_read_motifs(motifs, r, out);
     } while(in);
 
@@ -246,7 +263,8 @@ int main(int argc, char *argv[])
     po::options_description description{"motif-search [options]"};
     description.add_options()
         ("help,h", po::bool_switch(&help), "Display help")
-        ("motifs,m", po::value<string>(), "File containing motifs")
+        ("motifs,m", po::value<string>(), "File containing motifs to be mapped")
+        ("query,q", po::value<string>(), "File containing query motifs")
         ("read,r", po::value<vector<string>>()->multitoken(), "File(s) containing reads")
         ("kmerlen,l", po::value<unsigned>(), "Length of kmer (5)")
         ("output,o", po::value<string>(), "Ouptut file(default stdout)")
@@ -277,16 +295,30 @@ int main(int argc, char *argv[])
     g_mask = (1U << (g_kmer_len * 2)) - 1;
 
     const string &motif_name = vm["motifs"].as<string>();
-    cerr << "Reading motif file " << motif_name << endl;
+    cerr << "Reading map motif file " << motif_name << endl;
     ifstream mfile(motif_name);
-    vector<Motif> motifs;
+    vector<Motif> mmotifs;
     Motif m;
     while (mfile >> m)
-        motifs.push_back(m);
-    cerr << "Found " << motifs.size() << " motifs." << endl;
+        mmotifs.push_back(m);
+    cerr << "Found " << mmotifs.size() << " motifs." << endl;
 
-    for (Motif &m : motifs)
+    vector<Motif> qmotifs;
+    if (!vm["query"].empty()) {
+        const string &query_name = vm["query"].as<string>();
+        cerr << "Reading query motif file " << query_name << endl;
+        ifstream qfile(query_name);
+        while (qfile >> m)
+            qmotifs.push_back(m);
+        cerr << "Found " << qmotifs.size() << " query motifs." << endl;
+    } else {
+        cerr << "No query motifs supplied.\n";
+    }
+
+    for (Motif &m : mmotifs)
         g_e.embed_string(m.seq, m.eseq);
+    for (Motif &q : qmotifs)
+        g_e.embed_string(q.seq, q.eseq);
 
     make_code();
 
@@ -305,15 +337,20 @@ int main(int argc, char *argv[])
         }
     }
 
-    vector<Motif> best_motifs;
+    vector<Motif> best_mmotifs;
+    Motif best_qmotif;
     auto start = chrono::system_clock::now();
     vector<tuple<string, int, int>> stats;
     for (const string &rf : vm["read"].as<vector<string>>()) {
-        auto [ntotal, nmapped] = process_reads(motifs, best_motifs, rf,
-		ofile.is_open() ? ofile : cout);
+        auto [ntotal, nmapped] = process_reads(mmotifs, qmotifs,
+                best_mmotifs, best_qmotif,
+                rf, ofile.is_open() ? ofile : cout);
 	stats.push_back(tuple{rf, ntotal, nmapped});
     }
-    print_motifs(best_motifs, ofile.is_open() ? ofile : cout);
+    if (!qmotifs.empty())
+        best_mmotifs.push_back(best_qmotif);
+
+    print_motifs(best_mmotifs, ofile.is_open() ? ofile : cout);
     if (ofile.is_open())
         ofile.close();
 
